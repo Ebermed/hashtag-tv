@@ -59,6 +59,13 @@ function trackMetadata(rawTitle: string, channelTitle: string) {
   return { artist: cleanChannelTitle(channelTitle), title: cleanTrackTitle(rawTitle) || rawTitle.trim() };
 }
 
+export type YouTubeVideoMetadata = {
+  title: string;
+  artist: string;
+  youtubeId: string;
+  duration: number;
+};
+
 async function youtubeRequest<T>(path: string, parameters: Record<string, string>, apiKey: string) {
   const url = new URL(`https://www.googleapis.com/youtube/v3/${path}`);
   for (const [key, value] of Object.entries(parameters)) if (value) url.searchParams.set(key, value);
@@ -85,6 +92,33 @@ function chunksOf<T>(items: T[], size = 10) {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+}
+
+export async function getYouTubeVideoMetadata(videoId: string): Promise<YouTubeVideoMetadata> {
+  const apiKey = (env as unknown as YouTubeEnvironment).YOUTUBE_DATA_API_KEY;
+  if (!apiKey) throw new YouTubeImportError("#BYREQUEST está descansando un momento. Intenta de nuevo más tarde.", 503);
+
+  const videos = await youtubeRequest<VideoPage>("videos", {
+    part: "snippet,contentDetails,status",
+    id: videoId,
+  }, apiKey);
+  const item = videos.items?.[0];
+  const duration = durationToSeconds(item?.contentDetails?.duration ?? "");
+  const unavailable = !item?.id
+    || !duration
+    || item.status?.embeddable === false
+    || item.status?.privacyStatus === "private"
+    || item.snippet?.liveBroadcastContent === "live"
+    || item.snippet?.liveBroadcastContent === "upcoming";
+  if (unavailable) throw new YouTubeImportError("Ese video no está disponible para reproducirse dentro de #BYREQUEST.");
+
+  const metadata = trackMetadata(item.snippet?.title ?? "Videoclip sin título", item.snippet?.channelTitle ?? "");
+  return {
+    title: metadata.title,
+    artist: metadata.artist,
+    youtubeId: item.id,
+    duration: Math.min(duration, 14400),
+  };
 }
 
 export async function importYouTubePlaylist(value: string, channelId: string) {
