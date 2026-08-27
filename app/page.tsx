@@ -8,7 +8,18 @@ import { Slider } from "@/components/ui/slider";
 type Video = { id: string; title: string; artist: string; duration: number; year: string };
 type Channel = { id: string; label: string; description: string; accent: string; videos: Video[] };
 type RemoteSignal = { channelId?: string; mode: "automation" | "media" | "live"; segmentType?: string; mediaItemId?: number; sourceType?: "youtube" | "upload"; youtubeId?: string | null; mediaUrl?: string | null; title?: string; subtitle?: string; startedAt?: string; endsAt?: string | null; duration?: number };
-type RemoteScheduleItem = { id: number; type: string; title: string; subtitle: string; duration: number };
+type RemoteScheduleItem = {
+  id: number;
+  type: string;
+  sourceType: "youtube" | "upload";
+  youtubeId: string | null;
+  mediaUrl: string | null;
+  title: string;
+  subtitle: string;
+  duration: number;
+  startsAt: string;
+  endsAt: string;
+};
 
 type YouTubePlayer = {
   destroy: () => void;
@@ -94,13 +105,20 @@ function TuningCover({ visible, channelId }: { visible: boolean; channelId: stri
   </div>;
 }
 
-function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, volume, title, syncToClock = true }: { videoId: string; channelId: string; sourceKey: string; offset: number; muted: boolean; volume: number; title: string; syncToClock?: boolean }) {
+function SignalPreloader({ item }: { item?: RemoteScheduleItem }) {
+  if (!item || item.sourceType !== "upload" || !item.mediaUrl) return null;
+  return <video key={`${item.id}:${item.startsAt}`} className="signal-preload" src={item.mediaUrl} muted playsInline preload="auto" aria-hidden="true" />;
+}
+
+function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, duration, muted, volume, title, syncToClock = true, onEnded }: { videoId: string; channelId: string; sourceKey: string; offset: number; duration: number; muted: boolean; volume: number; title: string; syncToClock?: boolean; onEnded: () => void }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
   const readyRef = useRef(false);
   const mutedRef = useRef(muted);
   const volumeRef = useRef(volume);
   const syncRef = useRef(syncToClock);
+  const durationRef = useRef(duration);
+  const onEndedRef = useRef(onEnded);
   const videoIdRef = useRef(videoId);
   const anchorRef = useRef({ offset, startedAt: 0 });
   const settleRef = useRef<() => void>(() => undefined);
@@ -120,6 +138,11 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
   }, [syncToClock]);
 
   useEffect(() => {
+    durationRef.current = duration;
+    onEndedRef.current = onEnded;
+  }, [duration, onEnded]);
+
+  useEffect(() => {
     videoIdRef.current = videoId;
   }, [videoId]);
 
@@ -127,6 +150,7 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     anchorRef.current.startedAt = Date.now();
     let disposed = false;
     let syncTimer: number | undefined;
+    let endGuardTimer: number | undefined;
     let settleTimer: number | undefined;
     let revealTimer: number | undefined;
     const ytWindow = window as YouTubeWindow;
@@ -200,6 +224,9 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
             target.playVideo();
             settleRef.current();
             syncTimer = window.setInterval(() => resync(), 5000);
+            endGuardTimer = window.setInterval(() => {
+              if (syncRef.current && durationRef.current - expectedTime() <= 0.65) setTuning(true);
+            }, 120);
           },
           onStateChange: ({ data, target }) => {
             if (data === 1) {
@@ -208,8 +235,15 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
               settleRef.current();
             }
             if (data === 2) window.setTimeout(() => resync(true), 120);
+            if (data === 0) {
+              setTuning(true);
+              onEndedRef.current();
+            }
           },
-          onError: () => setTuning(false),
+          onError: () => {
+            setTuning(true);
+            onEndedRef.current();
+          },
         },
       });
     };
@@ -236,6 +270,7 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     return () => {
       disposed = true;
       if (syncTimer) window.clearInterval(syncTimer);
+      if (endGuardTimer) window.clearInterval(endGuardTimer);
       if (settleTimer) window.clearTimeout(settleTimer);
       if (revealTimer) window.clearTimeout(revealTimer);
       window.removeEventListener("focus", restoreOnFocus);
@@ -266,10 +301,15 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
   </div>;
 }
 
-function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, volume, title }: { mediaUrl: string; channelId: string; sourceKey: string; offset: number; muted: boolean; volume: number; title: string }) {
+function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, volume, title, onEnded }: { mediaUrl: string; channelId: string; sourceKey: string; offset: number; muted: boolean; volume: number; title: string; onEnded: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const anchorRef = useRef({ offset, startedAt: 0 });
+  const onEndedRef = useRef(onEnded);
   const [tuning, setTuning] = useState(true);
+
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -300,6 +340,8 @@ function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, v
     video.addEventListener("playing", revealIfSynchronized);
     video.addEventListener("seeked", revealIfSynchronized);
     video.addEventListener("canplay", revealIfSynchronized);
+    const advanceSignal = () => onEndedRef.current();
+    video.addEventListener("ended", advanceSignal);
     const revealOnError = () => setTuning(false);
     video.addEventListener("error", revealOnError, { once: true });
     video.currentTime = offset;
@@ -313,9 +355,13 @@ function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, v
       video.removeEventListener("playing", revealIfSynchronized);
       video.removeEventListener("seeked", revealIfSynchronized);
       video.removeEventListener("canplay", revealIfSynchronized);
+      video.removeEventListener("ended", advanceSignal);
       video.removeEventListener("error", revealOnError);
     };
-  }, [mediaUrl, offset, sourceKey]);
+    // Capture the offset once per signal. Updating it every clock tick restarts
+    // short IDs before they can become visible.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaUrl, sourceKey]);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -337,6 +383,7 @@ export default function Home() {
   const [requestUrl, setRequestUrl] = useState("");
   const [requestStatus, setRequestStatus] = useState<{ kind: "idle" | "loading" | "success" | "error"; message: string }>({ kind: "idle", message: "" });
   const [remote, setRemote] = useState<{ signal: RemoteSignal; schedule: RemoteScheduleItem[] }>({ signal: { mode: "automation" }, schedule: [] });
+  const refreshSignalRef = useRef<() => void>(() => undefined);
   useEffect(() => {
     const tick = () => setNow(Date.now());
     tick();
@@ -361,18 +408,47 @@ export default function Home() {
   const channel = visibleChannels.find((item) => item.id === channelId) ?? visibleChannels[0] ?? channels[0];
   useEffect(() => {
     let active = true;
+    let requestPending = false;
+    let refreshQueued = false;
     const updateSignal = async () => {
+      if (requestPending) {
+        refreshQueued = true;
+        return;
+      }
+      requestPending = true;
       try {
         const response = await fetch(`/api/signal?channel=${channel.id}`, { cache: "no-store" });
         if (!response.ok) return;
         const data = await response.json();
         if (active) setRemote(data);
       } catch {}
+      finally {
+        requestPending = false;
+        if (refreshQueued && active) {
+          refreshQueued = false;
+          void updateSignal();
+        }
+      }
     };
-    updateSignal();
-    const timer = window.setInterval(updateSignal, 3000);
-    return () => { active = false; window.clearInterval(timer); };
+    refreshSignalRef.current = () => { void updateSignal(); };
+    void updateSignal();
+    const timer = window.setInterval(() => { void updateSignal(); }, 3000);
+    const restoreSignal = () => { if (document.visibilityState === "visible") void updateSignal(); };
+    document.addEventListener("visibilitychange", restoreSignal);
+    return () => {
+      active = false;
+      refreshSignalRef.current = () => undefined;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", restoreSignal);
+    };
   }, [channel.id]);
+  useEffect(() => {
+    if (remote.signal.mode === "live" || !remote.signal.endsAt) return;
+    const transitionAt = Date.parse(remote.signal.endsAt);
+    if (!Number.isFinite(transitionAt)) return;
+    const timer = window.setTimeout(() => refreshSignalRef.current(), Math.max(0, transitionAt - Date.now() + 80));
+    return () => window.clearTimeout(timer);
+  }, [remote.signal.endsAt, remote.signal.mode]);
   const schedule = useMemo(() => getSchedule(channel, now), [channel, now]);
   const remoteStartedAt = remote.signal.startedAt ? Date.parse(remote.signal.startedAt) : now;
   const hasRemoteSignal = remote.signal.channelId === channel.id && Boolean(remote.signal.youtubeId || remote.signal.mediaUrl);
@@ -440,8 +516,9 @@ export default function Home() {
             </div>
           </div>
           <div className="screen-frame"><div className="screen">
-            {onAir ? hasRemoteSignal && remote.signal.sourceType === "upload" && remote.signal.mediaUrl ? <LinearUploadedPlayer mediaUrl={remote.signal.mediaUrl} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} /> : <LinearYouTubePlayer videoId={current.id} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} syncToClock={remote.signal.mode !== "live"} /> :
+            {onAir ? hasRemoteSignal && remote.signal.sourceType === "upload" && remote.signal.mediaUrl ? <LinearUploadedPlayer mediaUrl={remote.signal.mediaUrl} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} onEnded={() => refreshSignalRef.current()} /> : <LinearYouTubePlayer videoId={current.id} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} duration={current.duration} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} syncToClock={remote.signal.mode !== "live"} onEnded={() => refreshSignalRef.current()} /> :
               <button className="tune-in" onClick={() => setOnAir(true)}><span className="test-pattern" aria-hidden="true" /><strong>ENCENDER {channel.label}</strong><small>Entrarás a la transmisión que ya está al aire</small></button>}
+            {onAir && <SignalPreloader item={remote.schedule[0]} />}
             <div className="channel-bug">{channel.label}</div>
           </div></div>
           <div className="transport">

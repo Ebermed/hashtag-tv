@@ -34,6 +34,7 @@ button, a { font: inherit; }
 .screen iframe, .youtube-signal, .youtube-shell, .uploaded-signal { width: 100%; height: 100%; border: 0; }
 .youtube-shell { position: relative; }
 .uploaded-signal { display: block; background: #000; object-fit: contain; }
+.signal-preload { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .tuning-card { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 8px; overflow: hidden; background: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--signal) 18%, transparent), transparent 28%), repeating-linear-gradient(135deg, #101014 0 18px, #15151a 18px 36px); color: var(--signal); opacity: 0; visibility: hidden; transition: opacity .18s ease, visibility .18s ease; pointer-events: none; }
 .tuning-card.visible { opacity: 1; visibility: visible; }
 .tuning-card strong { font-size: clamp(38px, 7vw, 96px); line-height: .9; letter-spacing: -.08em; }

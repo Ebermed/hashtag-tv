@@ -76,6 +76,9 @@ async function context(channelId: ChannelId) {
   ]);
   const direct = allRotation.filter((item) => item.channelId === channelId);
   const musicSource = channelId === "tv" || channelId === "byrequest" ? allRotation : direct;
+  const identSource = channelId === "byrequest"
+    ? allRotation.filter((item) => item.channelId === "tv" || item.channelId === "byrequest")
+    : direct;
   const nowIso = new Date().toISOString();
   const settings: Settings = settingsRows[0] ?? { channelId, shuffleEnabled: true, commercialsEnabled: false, commercialIntervalMinutes: 30, updatedAt: nowIso };
   return {
@@ -83,7 +86,7 @@ async function context(channelId: ChannelId) {
     playout: playoutRows[0] ?? null,
     queue: queueRows as QueueEntry[],
     music: uniqueMedia(musicSource.filter((item) => item.media.type === "music").map((item) => item.media)),
-    idents: uniqueMedia(direct.filter((item) => item.media.type === "ident").map((item) => item.media)),
+    idents: uniqueMedia(identSource.filter((item) => item.media.type === "ident").map((item) => item.media)),
     commercials: uniqueMedia(direct.filter((item) => item.media.type === "commercial").map((item) => item.media)),
   };
 }
@@ -106,19 +109,32 @@ function chooseFollowing(previous: Media | null, at: number, seed: string, setti
 
 function previewFollowing(current: Media, currentEndsAt: number, sequence: number, settings: Settings, music: Media[], idents: Media[], commercials: Media[], sourceQueue: QueueEntry[], lastCommercialAt: string | null) {
   const queue = [...sourceQueue];
-  const preview: Media[] = [];
+  const preview: Array<{ media: Media; startsAt: string; endsAt: string }> = [];
   let previous: Media | null = current;
   let at = currentEndsAt;
   let commercialAnchor = lastCommercialAt;
   for (let index = 0; index < 2; index += 1) {
     const selected: Media | null = chooseFollowing(previous, at, `preview:${sequence + index}`, settings, music, idents, commercials, queue, commercialAnchor).media;
     if (!selected) break;
-    preview.push(selected);
+    const startsAt = new Date(at).toISOString();
+    const endsAt = new Date(at + selected.duration * 1000).toISOString();
+    preview.push({ media: selected, startsAt, endsAt });
     if (selected.type === "commercial") commercialAnchor = new Date(at).toISOString();
     at += selected.duration * 1000;
     previous = selected;
   }
-  return preview.map((media) => ({ id: media.id, type: media.type, title: media.title, subtitle: media.subtitle, duration: media.duration }));
+  return preview.map(({ media, startsAt, endsAt }) => ({
+    id: media.id,
+    type: media.type,
+    sourceType: media.sourceType,
+    youtubeId: media.sourceType === "youtube" ? media.youtubeId : null,
+    mediaUrl: media.sourceType === "upload" ? `/api/media/${media.id}` : null,
+    title: media.title,
+    subtitle: media.subtitle,
+    duration: media.duration,
+    startsAt,
+    endsAt,
+  }));
 }
 
 async function automaticSignal(channelId: ChannelId) {
