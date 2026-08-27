@@ -6,6 +6,10 @@ import { channelSettings, controlLog, liveSessions, mediaItems, playlistItems, p
 export const CHANNEL_IDS = ["tv", "rock", "pop", "perreo", "kpop", "byrequest"] as const;
 export type ChannelId = (typeof CHANNEL_IDS)[number];
 
+export function defaultChannelEnabled(channelId: ChannelId) {
+  return channelId === "tv" || channelId === "byrequest";
+}
+
 export function isChannelId(value: unknown): value is ChannelId {
   return typeof value === "string" && CHANNEL_IDS.includes(value as ChannelId);
 }
@@ -42,6 +46,12 @@ export async function getControlState() {
     db.select().from(controlLog).orderBy(desc(controlLog.id)).limit(12),
   ]);
   return { media, rotation, queue, settings, liveSessions: sessions, overrides, logs };
+}
+
+export async function getPublicChannelIds() {
+  const rows = await getDb().select({ channelId: channelSettings.channelId, enabled: channelSettings.enabled }).from(channelSettings);
+  const visibility = new Map(rows.map((row) => [row.channelId, row.enabled]));
+  return CHANNEL_IDS.filter((channelId) => visibility.get(channelId) ?? defaultChannelEnabled(channelId));
 }
 
 export async function logControl(channelId: string, action: string, detail: string, operatorEmail: string) {
