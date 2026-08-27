@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Activity, Antenna, ArrowDown, ArrowLeft, ArrowUp, CirclePlay, Clapperboard, Clock3, Library, ListPlus, ListVideo, LogOut, RadioTower, RefreshCw, Send, Shuffle, Trash2, Tv, Upload, Video, Zap } from "lucide-react";
+import { Activity, Antenna, ArrowDown, ArrowLeft, ArrowUp, CirclePlay, Clapperboard, Clock3, Eye, Library, ListPlus, ListVideo, LogOut, RadioTower, RefreshCw, Send, Shuffle, Trash2, Tv, Upload, Video, Zap } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ type RotationItem = Pick<MediaItem, "type" | "title" | "subtitle" | "youtubeId" 
 type QueueItem = RotationItem;
 type Signal = { channelId: string; mode: "automation" | "media" | "live"; title: string; subtitle: string; youtubeId?: string | null; startedAt?: string; endsAt?: string | null };
 type LogItem = { id: number; channelId: string; action: string; detail: string; createdAt: string };
-type ChannelSetting = { channelId: string; shuffleEnabled: boolean; commercialsEnabled: boolean; commercialIntervalMinutes: number };
+type ChannelSetting = { channelId: string; enabled: boolean; shuffleEnabled: boolean; commercialsEnabled: boolean; commercialIntervalMinutes: number };
 type LiveSession = { channelId: string; youtubeId: string; title: string; subtitle: string; startedAt: string };
 type ControlState = { media: MediaItem[]; rotation: RotationItem[]; queue: QueueItem[]; settings: ChannelSetting[]; liveSessions: LiveSession[]; overrides: Signal[]; logs: LogItem[] };
 type DurationStatus = "idle" | "detecting" | "detected" | "error";
@@ -33,6 +33,8 @@ const channelList = [
   { id: "kpop", label: "#KPOP", color: "#a985ff" },
   { id: "byrequest", label: "#BYREQUEST", color: "#53d8ff" },
 ];
+
+const isCoreChannel = (channelId: string) => channelId === "tv" || channelId === "byrequest";
 
 const typeLabel = { music: "Videoclip", ident: "ID de canal", commercial: "Comercial", program: "Programa" };
 
@@ -316,7 +318,7 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
   const activeChannel = channelList.find((channel) => channel.id === channelId)!;
   const currentSignal = state?.overrides.find((signal) => signal.channelId === channelId);
   const liveSession = state?.liveSessions.find((session) => session.channelId === channelId);
-  const settings = state?.settings.find((item) => item.channelId === channelId) ?? { channelId, shuffleEnabled: true, commercialsEnabled: false, commercialIntervalMinutes: 30 };
+  const settings = state?.settings.find((item) => item.channelId === channelId) ?? { channelId, enabled: isCoreChannel(channelId), shuffleEnabled: true, commercialsEnabled: false, commercialIntervalMinutes: 30 };
   const expired = Boolean(currentSignal?.endsAt && clock && Date.parse(currentSignal.endsAt) <= clock);
   const isAutomatic = !liveSession && (!currentSignal || currentSignal.mode === "automation" || expired);
   const rotation = useMemo(() => state?.rotation.filter((item) => item.channelId === channelId) ?? [], [state, channelId]);
@@ -325,7 +327,7 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
   const onAirSubtitle = liveSession && (currentSignal?.mode === "live" || expired) ? liveSession.subtitle : isAutomatic ? `${rotation.filter((item) => item.type === "music").length} videoclips en rotación` : currentSignal?.subtitle ?? "";
 
   function updateSettings(values: Partial<ChannelSetting>) {
-    return action({ action: "settings", channelId, shuffleEnabled: values.shuffleEnabled ?? settings.shuffleEnabled, commercialsEnabled: values.commercialsEnabled ?? settings.commercialsEnabled }, `Ajustes de ${activeChannel.label} guardados.`);
+    return action({ action: "settings", channelId, enabled: values.enabled ?? settings.enabled, shuffleEnabled: values.shuffleEnabled ?? settings.shuffleEnabled, commercialsEnabled: values.commercialsEnabled ?? settings.commercialsEnabled }, `Ajustes de ${activeChannel.label} guardados.`);
   }
 
   return <main className="control-room" style={{ "--control-signal": activeChannel.color } as React.CSSProperties}>
@@ -337,7 +339,10 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
     </header>
 
     <section className="channel-bank" aria-label="Selector de señal">
-      {channelList.map((channel) => <button key={channel.id} className={channel.id === channelId ? "active" : ""} onClick={() => setChannelId(channel.id)}><span>{channel.label}</span><small>{channel.id === channelId ? "EN CONTROL" : "AUTOMÁTICO"}</small></button>)}
+      {channelList.map((channel) => {
+        const enabled = state?.settings.find((item) => item.channelId === channel.id)?.enabled ?? isCoreChannel(channel.id);
+        return <button key={channel.id} className={`${channel.id === channelId ? "active" : ""}${enabled ? "" : " is-offline"}`} onClick={() => setChannelId(channel.id)}><span>{channel.label}</span><small>{channel.id === channelId ? "EN CONTROL" : enabled ? "PUBLICADA" : "OCULTA"}</small></button>;
+      })}
     </section>
 
     <section className="master-grid">
@@ -381,6 +386,7 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
             <div className="panel-heading"><div><span>AUTOMATIZACIÓN</span><h2>Rotación de {activeChannel.label}</h2></div><Badge>{rotation.length} piezas</Badge></div>
             {channelId === "tv" && <div className="tv-rule"><Tv /><div><b>#TV mezcla todo</b><p>Además de sus propias piezas, toma videoclips de #ROCK, #POP, #PERREO y #KPOP.</p></div></div>}
             <div className="automation-settings">
+              <label><span><Eye /> Visibilidad pública<small>{isCoreChannel(channelId) ? "Esta señal principal permanece publicada." : "Al apagarla desaparece por completo de la página pública."}</small></span><Switch checked={settings.enabled} disabled={isCoreChannel(channelId)} onCheckedChange={(checked) => updateSettings({ enabled: checked })} /></label>
               <label><span><Shuffle /> Reproducción aleatoria<small>Activa por defecto; el orden manual se usa al apagarla.</small></span><Switch checked={settings.shuffleEnabled} onCheckedChange={(checked) => updateSettings({ shuffleEnabled: checked })} /></label>
               <label><span><Clock3 /> Comerciales cada 30 minutos<small>Solo entran si hay comerciales cargados en este canal.</small></span><Switch checked={settings.commercialsEnabled} onCheckedChange={(checked) => updateSettings({ commercialsEnabled: checked })} /></label>
             </div>
