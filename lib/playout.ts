@@ -8,7 +8,14 @@ type QueueEntry = { queueId: number; position: number; media: Media };
 type Settings = typeof channelSettings.$inferSelect;
 type Selection = { media: Media | null; queueId: number | null };
 
+const IDENT_WINDOW_SECONDS = 10;
+
+function playoutDuration(media: Media) {
+  return media.type === "ident" ? Math.max(IDENT_WINDOW_SECONDS, media.duration) : media.duration;
+}
+
 function mediaSignal(channelId: ChannelId, media: Media, startedAt: string, endsAt: string, mode: "automation" | "media" = "automation") {
+  const scheduledDuration = Math.max(1, Math.round((Date.parse(endsAt) - Date.parse(startedAt)) / 1000));
   return {
     channelId,
     mode,
@@ -21,7 +28,8 @@ function mediaSignal(channelId: ChannelId, media: Media, startedAt: string, ends
     subtitle: media.subtitle,
     startedAt,
     endsAt,
-    duration: media.duration,
+    duration: Number.isFinite(scheduledDuration) ? scheduledDuration : playoutDuration(media),
+    assetDuration: media.duration,
   };
 }
 
@@ -117,10 +125,11 @@ function previewFollowing(current: Media, currentEndsAt: number, sequence: numbe
     const selected: Media | null = chooseFollowing(previous, at, `preview:${sequence + index}`, settings, music, idents, commercials, queue, commercialAnchor).media;
     if (!selected) break;
     const startsAt = new Date(at).toISOString();
-    const endsAt = new Date(at + selected.duration * 1000).toISOString();
+    const duration = playoutDuration(selected);
+    const endsAt = new Date(at + duration * 1000).toISOString();
     preview.push({ media: selected, startsAt, endsAt });
     if (selected.type === "commercial") commercialAnchor = new Date(at).toISOString();
-    at += selected.duration * 1000;
+    at += duration * 1000;
     previous = selected;
   }
   return preview.map(({ media, startsAt, endsAt }) => ({
@@ -131,7 +140,8 @@ function previewFollowing(current: Media, currentEndsAt: number, sequence: numbe
     mediaUrl: media.sourceType === "upload" ? `/api/media/${media.id}` : null,
     title: media.title,
     subtitle: media.subtitle,
-    duration: media.duration,
+    duration: playoutDuration(media),
+    assetDuration: media.duration,
     startsAt,
     endsAt,
   }));
@@ -155,7 +165,7 @@ async function automaticSignal(channelId: ChannelId) {
     if (!current) return { signal: { channelId, mode: "automation" as const }, schedule: [] };
 
     const startedAt = new Date(now).toISOString();
-    const endsAt = new Date(now + current.duration * 1000).toISOString();
+    const endsAt = new Date(now + playoutDuration(current) * 1000).toISOString();
     const lastCommercialAt = current.type === "commercial" ? startedAt : data.playout?.lastCommercialAt ?? null;
     await db.insert(channelPlayout).values({ channelId, currentMediaItemId: current.id, startedAt, endsAt, lastCommercialAt, sequence, updatedAt: startedAt }).onConflictDoUpdate({ target: channelPlayout.channelId, set: { currentMediaItemId: current.id, startedAt, endsAt, lastCommercialAt, sequence, updatedAt: startedAt } });
     if (chosen.queueId) await db.delete(playoutQueueItems).where(eq(playoutQueueItems.id, chosen.queueId));
@@ -164,7 +174,7 @@ async function automaticSignal(channelId: ChannelId) {
   }
 
   const startedAt = data.playout?.startedAt ?? new Date(now).toISOString();
-  const endsAt = data.playout?.endsAt ?? new Date(now + current.duration * 1000).toISOString();
+  const endsAt = data.playout?.endsAt ?? new Date(now + playoutDuration(current) * 1000).toISOString();
   const schedule = previewFollowing(current, Date.parse(endsAt), data.playout?.sequence ?? 0, data.settings, data.music, data.idents, data.commercials, data.queue, data.playout?.lastCommercialAt ?? null);
   return { signal: mediaSignal(channelId, current, startedAt, endsAt), schedule };
 }
