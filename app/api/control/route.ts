@@ -1,5 +1,5 @@
 import { max, min } from "drizzle-orm";
-import { ControlError, channelSettings, extractYouTubeId, getControlState, getDb, isChannelId, liveSessions, logControl, mediaItems, playlistItems, playoutQueueItems, requireOperator, signalOverrides, eq } from "@/lib/control";
+import { ControlError, channelSettings, defaultChannelEnabled, extractYouTubeId, getControlState, getDb, isChannelId, liveSessions, logControl, mediaItems, playlistItems, playoutQueueItems, requireOperator, signalOverrides, eq } from "@/lib/control";
 import { getMediaBucket } from "@/lib/media-storage";
 import { importYouTubePlaylist, YouTubeImportError } from "@/lib/youtube-playlist";
 
@@ -122,15 +122,21 @@ export async function POST(request: Request) {
     if (action === "settings") {
       const channelId = payload.channelId;
       if (!isChannelId(channelId)) throw new ControlError("Canal inválido.");
+      const [current] = await db.select().from(channelSettings).where(eq(channelSettings.channelId, channelId)).limit(1);
       const updatedAt = new Date().toISOString();
       const values = {
         channelId,
-        shuffleEnabled: payload.shuffleEnabled !== false,
-        commercialsEnabled: payload.commercialsEnabled === true,
+        enabled: channelId === "tv" || channelId === "byrequest"
+          ? true
+          : typeof payload.enabled === "boolean" ? payload.enabled : current?.enabled ?? defaultChannelEnabled(channelId),
+        shuffleEnabled: typeof payload.shuffleEnabled === "boolean" ? payload.shuffleEnabled : current?.shuffleEnabled ?? true,
+        commercialsEnabled: typeof payload.commercialsEnabled === "boolean" ? payload.commercialsEnabled : current?.commercialsEnabled ?? false,
         commercialIntervalMinutes: 30,
         updatedAt,
       };
       await db.insert(channelSettings).values(values).onConflictDoUpdate({ target: channelSettings.channelId, set: values });
+      const visibilityChanged = current ? current.enabled !== values.enabled : defaultChannelEnabled(channelId) !== values.enabled;
+      if (visibilityChanged) await logControl(channelId, values.enabled ? "Publicó la señal" : "Ocultó la señal", "Visibilidad del canal actualizada", user.email);
       return Response.json({ settings: values });
     }
 
