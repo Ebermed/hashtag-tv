@@ -36,9 +36,7 @@ button, a { font: inherit; }
 .uploaded-signal { display: block; background: #000; object-fit: contain; }
 .tuning-card { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 8px; overflow: hidden; background: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--signal) 18%, transparent), transparent 28%), repeating-linear-gradient(135deg, #101014 0 18px, #15151a 18px 36px); color: var(--signal); opacity: 0; visibility: hidden; transition: opacity .18s ease, visibility .18s ease; pointer-events: none; }
 .tuning-card.visible { opacity: 1; visibility: visible; }
-.tuning-card span { position: relative; color: #b2b2b8; font-size: 9px; font-weight: 900; letter-spacing: .24em; }
 .tuning-card strong { font-size: clamp(38px, 7vw, 96px); line-height: .9; letter-spacing: -.08em; }
-.tuning-card small { color: #77777d; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .tuning-scan { position: absolute; inset: -80% 0 auto; height: 70%; background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--signal) 12%, transparent), transparent); animation: tuning-scan 1.8s linear infinite; }
 .tuning-loader { display: flex; gap: 5px; margin-top: 13px; }
 .tuning-loader i { width: 20px; height: 3px; background: #393940; animation: tuning-bars 1.2s ease-in-out infinite; }

@@ -21,6 +21,7 @@ type ChannelSetting = { channelId: string; enabled: boolean; shuffleEnabled: boo
 type LiveSession = { channelId: string; youtubeId: string; title: string; subtitle: string; startedAt: string };
 type ControlState = { media: MediaItem[]; rotation: RotationItem[]; queue: QueueItem[]; settings: ChannelSetting[]; liveSessions: LiveSession[]; overrides: Signal[]; logs: LogItem[] };
 type DurationStatus = "idle" | "detecting" | "detected" | "error";
+type UploadFeedback = { kind: "idle" | "uploading" | "success" | "error"; message: string };
 type YouTubePlayer = { destroy: () => void; getDuration: () => number; mute: () => void; pauseVideo: () => void };
 type YouTubeApi = { Player: new (element: HTMLElement, options: { videoId: string; playerVars: Record<string, number>; events: { onReady: (event: { target: YouTubePlayer }) => void; onError: () => void } }) => YouTubePlayer };
 type YouTubeWindow = Window & { YT?: YouTubeApi; onYouTubeIframeAPIReady?: () => void };
@@ -162,6 +163,29 @@ function detectFileDuration(file: File) {
   });
 }
 
+function sendVideoUpload(form: FormData, onProgress: (value: number) => void) {
+  return new Promise<{ status: number; data: { error?: string } }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/control/upload");
+    request.responseType = "json";
+    request.timeout = 5 * 60 * 1000;
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+    };
+    request.onload = () => {
+      let data = request.response as { error?: string } | null;
+      if (!data) {
+        try { data = JSON.parse(request.responseText) as { error?: string }; }
+        catch { data = {}; }
+      }
+      resolve({ status: request.status, data });
+    };
+    request.onerror = () => reject(new Error("Se perdió la conexión mientras se subía el video."));
+    request.ontimeout = () => reject(new Error("La subida tardó demasiado. Revisa tu conexión e inténtalo de nuevo."));
+    request.send(form);
+  });
+}
+
 export function CabinaClient({ operatorName }: { operatorName: string }) {
   const [state, setState] = useState<ControlState | null>(null);
   const [channelId, setChannelId] = useState("tv");
@@ -172,6 +196,8 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
   const [live, setLive] = useState({ title: "", subtitle: "", youtube: "" });
   const [asset, setAsset] = useState({ type: "music" as MediaType, source: "youtube" as "youtube" | "upload", title: "", subtitle: "", youtube: "", duration: "" });
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback>({ kind: "idle", message: "" });
   const [durationStatus, setDurationStatus] = useState<DurationStatus>("idle");
   const [playlistUrl, setPlaylistUrl] = useState("");
   const [playlistBusy, setPlaylistBusy] = useState(false);
@@ -255,6 +281,14 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
   }
 
   async function chooseUpload(file: File | null) {
+    setUploadProgress(null);
+    setUploadFeedback({ kind: "idle", message: "" });
+    if (file && file.size > 50 * 1024 * 1024) {
+      setUploadFile(null);
+      setDurationStatus("idle");
+      setUploadFeedback({ kind: "error", message: "El archivo supera el límite de 50 MB." });
+      return;
+    }
     setUploadFile(file);
     setAsset((current) => ({ ...current, duration: "" }));
     setError("");
@@ -272,10 +306,14 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
 
   async function upload(event: FormEvent) {
     event.preventDefault();
-    if (!uploadFile) { setError("Selecciona un archivo de video."); return; }
+    if (!uploadFile) {
+      setUploadFeedback({ kind: "error", message: "Selecciona un archivo de video." });
+      return;
+    }
     const duration = await resolveDuration();
     if (!duration) return;
-    setBusy(true); setError(""); setNotice("");
+    setBusy(true); setError(""); setNotice(""); setUploadProgress(0);
+    setUploadFeedback({ kind: "uploading", message: "Preparando el video…" });
     try {
       const form = new FormData();
       form.set("file", uploadFile);
@@ -284,13 +322,23 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
       form.set("subtitle", asset.subtitle);
       form.set("duration", String(duration));
       form.set("channelId", channelId);
-      const response = await fetch("/api/control/upload", { method: "POST", body: form });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "No fue posible subir el video.");
-      setNotice(`${asset.title || "La pieza"} fue cargada y añadida a la rotación.`);
+      const response = await sendVideoUpload(form, (progress) => {
+        setUploadProgress(progress);
+        setUploadFeedback({ kind: "uploading", message: `Subiendo video · ${progress}%` });
+      });
+      if (response.status === 401) { window.location.replace("/cabina/login"); return; }
+      if (response.status < 200 || response.status >= 300) throw new Error(response.data.error ?? "No fue posible subir el video.");
+      setUploadProgress(100);
+      const success = `${asset.title || "La pieza"} fue cargada y añadida a la rotación.`;
+      setNotice(success);
       resetAsset();
       await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Error inesperado"); }
+      setUploadFeedback({ kind: "success", message: success });
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Error inesperado";
+      setError(message);
+      setUploadFeedback({ kind: "error", message });
+    }
     finally { setBusy(false); }
   }
 
@@ -411,10 +459,12 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
               <div className="input-stack"><label>Tipo de contenido</label><NativeSelect value={asset.type} onChange={(event) => setAsset({ ...asset, type: event.target.value as MediaType })}><NativeSelectOption value="music">Videoclip</NativeSelectOption><NativeSelectOption value="ident">ID de canal</NativeSelectOption><NativeSelectOption value="commercial">Comercial</NativeSelectOption><NativeSelectOption value="program">Programa grabado</NativeSelectOption></NativeSelect></div>
               <div className="input-stack"><label>Título de la pieza</label><Input value={asset.title} onChange={(event) => setAsset({ ...asset, title: event.target.value })} placeholder="Título" required /></div>
               <div className="input-stack"><label>Artista, marca o programa</label><Input value={asset.subtitle} onChange={(event) => setAsset({ ...asset, subtitle: event.target.value })} placeholder="Descripción" /></div>
-              <div className="asset-source"><span>ORIGEN</span><div><button type="button" className={asset.source === "youtube" ? "active" : ""} onClick={() => { setAsset({ ...asset, source: "youtube", duration: "" }); setUploadFile(null); setDurationStatus("idle"); setError(""); }}>URL de YouTube</button><button type="button" className={asset.source === "upload" ? "active" : ""} onClick={() => { setAsset({ ...asset, source: "upload", duration: "" }); setDurationStatus("idle"); setError(""); }}>Subir video</button></div></div>
+              <div className="asset-source"><span>ORIGEN</span><div><button type="button" className={asset.source === "youtube" ? "active" : ""} onClick={() => { setAsset({ ...asset, source: "youtube", duration: "" }); setUploadFile(null); setUploadProgress(null); setUploadFeedback({ kind: "idle", message: "" }); setDurationStatus("idle"); setError(""); }}>URL de YouTube</button><button type="button" className={asset.source === "upload" ? "active" : ""} onClick={() => { setAsset({ ...asset, source: "upload", duration: "" }); setUploadProgress(null); setUploadFeedback({ kind: "idle", message: "" }); setDurationStatus("idle"); setError(""); }}>Subir video</button></div></div>
               <div className="input-stack asset-file"><label>{asset.source === "youtube" ? "Enlace de YouTube" : "Archivo de video · máximo 50 MB"}</label>{asset.source === "youtube" ? <Input value={asset.youtube} onChange={(event) => { setAsset({ ...asset, youtube: event.target.value, duration: "" }); setDurationStatus("idle"); }} placeholder="https://youtube.com/watch?v=..." required /> : <Input type="file" accept="video/*" onChange={(event) => chooseUpload(event.target.files?.[0] ?? null)} required />}</div>
               <div className={`asset-duration ${durationStatus}`}><label htmlFor={durationStatus === "error" ? "asset-duration" : undefined}>Duración automática</label>{durationStatus === "error" ? <div className="duration-fallback"><Input id="asset-duration" type="number" min="1" max="14400" value={asset.duration} onChange={(event) => setAsset({ ...asset, duration: event.target.value })} placeholder="Segundos" required /><small>{asset.duration ? formatDuration(asset.duration) : "Respaldo manual"}</small></div> : <div className="duration-readout"><Clock3 /><span>{durationStatus === "detecting" ? "Leyendo el video…" : durationStatus === "detected" ? `${formatDuration(asset.duration)} detectada` : asset.source === "upload" ? "Se lee al elegirlo" : "Se lee al agregarlo"}</span></div>}</div>
-              <Button type="submit" disabled={busy || durationStatus === "detecting"}>{asset.source === "upload" ? <Upload /> : <Zap />} {durationStatus === "detecting" ? "Detectando duración" : asset.source === "upload" ? "Subir" : "Agregar"} {durationStatus !== "detecting" && `a ${activeChannel.label}`}</Button>
+              <Button type="submit" disabled={busy || durationStatus === "detecting"} aria-busy={asset.source === "upload" && busy}>{asset.source === "upload" ? <Upload /> : <Zap />} {asset.source === "upload" && busy ? `Subiendo ${uploadProgress ?? 0}%` : durationStatus === "detecting" ? "Detectando duración" : asset.source === "upload" ? "Subir" : "Agregar"} {durationStatus !== "detecting" && !(asset.source === "upload" && busy) && `a ${activeChannel.label}`}</Button>
+              {asset.source === "upload" && uploadProgress !== null && <div className="asset-upload-progress" role="progressbar" aria-label="Progreso de subida" aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadProgress}><span style={{ width: `${uploadProgress}%` }} /></div>}
+              {asset.source === "upload" && uploadFeedback.kind !== "idle" && <p className={`asset-feedback ${uploadFeedback.kind}`} aria-live="polite">{uploadFeedback.message}</p>}
             </form>
             <div className="library-grid">{state?.media.map((item) => {
               const assigned = state.rotation.filter((rotationItem) => rotationItem.mediaItemId === item.id).map((rotationItem) => channelList.find((channel) => channel.id === rotationItem.channelId)?.label).filter(Boolean);

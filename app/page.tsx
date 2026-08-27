@@ -32,6 +32,7 @@ type YouTubeWindow = Window & {
         events: {
           onReady: (event: { target: YouTubePlayer }) => void;
           onStateChange: (event: { data: number; target: YouTubePlayer }) => void;
+          onError: () => void;
         };
       },
     ) => YouTubePlayer;
@@ -86,11 +87,9 @@ function getSchedule(channel: Channel, now: number) {
 }
 
 function TuningCover({ visible, channelId }: { visible: boolean; channelId: string }) {
-  return <div className={visible ? "tuning-card visible" : "tuning-card"} role="status" aria-live="polite" aria-label={visible ? "Sincronizando señal" : undefined}>
+  return <div className={visible ? "tuning-card visible" : "tuning-card"} role="status" aria-live="polite" aria-label={visible ? `Abriendo #${channelId.toUpperCase()}` : undefined}>
     <div className="tuning-scan" aria-hidden="true" />
-    <span>SINCRONIZANDO SEÑAL</span>
     <strong>#{channelId.toUpperCase()}</strong>
-    <small>Buscando el punto exacto</small>
     <div className="tuning-loader" aria-hidden="true"><i /><i /><i /><i /></div>
   </div>;
 }
@@ -129,8 +128,17 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     let disposed = false;
     let syncTimer: number | undefined;
     let settleTimer: number | undefined;
+    let revealTimer: number | undefined;
     const ytWindow = window as YouTubeWindow;
     const expectedTime = () => anchorRef.current.offset + (Date.now() - anchorRef.current.startedAt) / 1000;
+    const beginTuning = () => {
+      setTuning(true);
+      if (revealTimer) return;
+      revealTimer = window.setTimeout(() => {
+        revealTimer = undefined;
+        setTuning(false);
+      }, 4500);
+    };
     const waitUntilSynchronized = (attempt = 0) => {
       if (disposed) return;
       const player = playerRef.current;
@@ -141,15 +149,19 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
         settleTimer = window.setTimeout(() => setTuning(false), 140);
         return;
       }
-      if (attempt >= 60) {
-        if (playing) setTuning(false);
+      if (attempt >= 45) {
+        setTuning(false);
         return;
+      }
+      if (attempt > 0 && attempt % 10 === 0) {
+        if (syncRef.current) player.seekTo(expectedTime(), true);
+        player.playVideo();
       }
       settleTimer = window.setTimeout(() => waitUntilSynchronized(attempt + 1), 100);
     };
     settleRef.current = () => {
       if (settleTimer) window.clearTimeout(settleTimer);
-      setTuning(true);
+      beginTuning();
       waitUntilSynchronized();
     };
     const resync = (force = false) => {
@@ -158,9 +170,7 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
       const expected = expectedTime();
       const actual = player.getCurrentTime();
       if (syncRef.current && (force || Math.abs(actual - expected) > 2.5)) {
-        setTuning(true);
         player.seekTo(expected, true);
-        settleRef.current();
       }
       if (player.getPlayerState() === 2) player.playVideo();
     };
@@ -183,16 +193,23 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
           onReady: ({ target }) => {
             readyRef.current = true;
             target.setVolume(volumeRef.current);
-            if (mutedRef.current) target.mute(); else target.unMute();
+            // Muted autoplay is accepted much more consistently on iOS. The
+            // requested audio state is restored as soon as playback begins.
+            target.mute();
             if (syncRef.current) target.seekTo(expectedTime(), true);
             target.playVideo();
             settleRef.current();
             syncTimer = window.setInterval(() => resync(), 5000);
           },
-          onStateChange: ({ data }) => {
-            if (data === 1) settleRef.current();
+          onStateChange: ({ data, target }) => {
+            if (data === 1) {
+              target.setVolume(volumeRef.current);
+              if (mutedRef.current) target.mute(); else target.unMute();
+              settleRef.current();
+            }
             if (data === 2) window.setTimeout(() => resync(true), 120);
           },
+          onError: () => setTuning(false),
         },
       });
     };
@@ -213,12 +230,14 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     }
 
     const restoreOnFocus = () => resync();
+    beginTuning();
     window.addEventListener("focus", restoreOnFocus);
     document.addEventListener("visibilitychange", restoreOnFocus);
     return () => {
       disposed = true;
       if (syncTimer) window.clearInterval(syncTimer);
       if (settleTimer) window.clearTimeout(settleTimer);
+      if (revealTimer) window.clearTimeout(revealTimer);
       window.removeEventListener("focus", restoreOnFocus);
       document.removeEventListener("visibilitychange", restoreOnFocus);
       readyRef.current = false;
@@ -232,10 +251,9 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     anchorRef.current = { offset, startedAt: Date.now() };
     const player = playerRef.current;
     if (!player || !readyRef.current) return;
-    setTuning(true);
     player.loadVideoById({ videoId, startSeconds: Math.floor(offset) });
     player.setVolume(volumeRef.current);
-    if (mutedRef.current) player.mute(); else player.unMute();
+    player.mute();
     player.playVideo();
     settleRef.current();
     // The offset is captured when the signal changes. Clock ticks must not retune it.
@@ -256,7 +274,16 @@ function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, v
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    setTuning(true);
+    let revealTimer: number | undefined;
+    const beginTuning = () => {
+      setTuning(true);
+      if (revealTimer) return;
+      revealTimer = window.setTimeout(() => {
+        revealTimer = undefined;
+        setTuning(false);
+      }, 3500);
+    };
+    beginTuning();
     anchorRef.current = { offset, startedAt: Date.now() };
     const revealIfSynchronized = () => {
       const expected = anchorRef.current.offset + (Date.now() - anchorRef.current.startedAt) / 1000;
@@ -265,7 +292,6 @@ function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, v
     const sync = () => {
       const expected = anchorRef.current.offset + (Date.now() - anchorRef.current.startedAt) / 1000;
       if (Math.abs(video.currentTime - expected) > 2) {
-        setTuning(true);
         video.currentTime = expected;
       }
       if (video.paused) video.play().catch(() => undefined);
@@ -273,15 +299,21 @@ function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, v
     };
     video.addEventListener("playing", revealIfSynchronized);
     video.addEventListener("seeked", revealIfSynchronized);
+    video.addEventListener("canplay", revealIfSynchronized);
+    const revealOnError = () => setTuning(false);
+    video.addEventListener("error", revealOnError, { once: true });
     video.currentTime = offset;
     video.play().catch(() => undefined);
     const timer = window.setInterval(sync, 5000);
     window.addEventListener("focus", sync);
     return () => {
       window.clearInterval(timer);
+      if (revealTimer) window.clearTimeout(revealTimer);
       window.removeEventListener("focus", sync);
       video.removeEventListener("playing", revealIfSynchronized);
       video.removeEventListener("seeked", revealIfSynchronized);
+      video.removeEventListener("canplay", revealIfSynchronized);
+      video.removeEventListener("error", revealOnError);
     };
   }, [mediaUrl, offset, sourceKey]);
 
