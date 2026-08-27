@@ -72,10 +72,10 @@ async function context(channelId: ChannelId) {
     db.select({ channelId: playlistItems.channelId, position: playlistItems.position, media: mediaItems }).from(playlistItems).innerJoin(mediaItems, eq(playlistItems.mediaItemId, mediaItems.id)).orderBy(asc(playlistItems.position)),
     db.select().from(channelSettings).where(eq(channelSettings.channelId, channelId)).limit(1),
     db.select().from(channelPlayout).where(eq(channelPlayout.channelId, channelId)).limit(1),
-    db.select({ queueId: playoutQueueItems.id, position: playoutQueueItems.position, media: mediaItems }).from(playoutQueueItems).innerJoin(mediaItems, eq(playoutQueueItems.mediaItemId, mediaItems.id)).where(eq(playoutQueueItems.channelId, channelId)).orderBy(asc(playoutQueueItems.position)),
+    db.select({ queueId: playoutQueueItems.id, position: playoutQueueItems.position, media: mediaItems }).from(playoutQueueItems).innerJoin(mediaItems, eq(playoutQueueItems.mediaItemId, mediaItems.id)).where(eq(playoutQueueItems.channelId, channelId)).orderBy(asc(playoutQueueItems.position), asc(playoutQueueItems.id)),
   ]);
   const direct = allRotation.filter((item) => item.channelId === channelId);
-  const musicSource = channelId === "tv" ? allRotation : direct;
+  const musicSource = channelId === "tv" || channelId === "byrequest" ? allRotation : direct;
   const nowIso = new Date().toISOString();
   const settings: Settings = settingsRows[0] ?? { channelId, shuffleEnabled: true, commercialsEnabled: false, commercialIntervalMinutes: 30, updatedAt: nowIso };
   return {
