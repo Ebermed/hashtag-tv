@@ -85,6 +85,16 @@ function getSchedule(channel: Channel, now: number) {
   return { current: channel.videos[0], next: channel.videos[1], after: channel.videos[2], offset: 0, progress: 0 };
 }
 
+function TuningCover({ visible, channelId }: { visible: boolean; channelId: string }) {
+  return <div className={visible ? "tuning-card visible" : "tuning-card"} role="status" aria-live="polite" aria-label={visible ? "Sincronizando señal" : undefined}>
+    <div className="tuning-scan" aria-hidden="true" />
+    <span>SINCRONIZANDO SEÑAL</span>
+    <strong>#{channelId.toUpperCase()}</strong>
+    <small>Buscando el punto exacto</small>
+    <div className="tuning-loader" aria-hidden="true"><i /><i /><i /><i /></div>
+  </div>;
+}
+
 function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, volume, title, syncToClock = true }: { videoId: string; channelId: string; sourceKey: string; offset: number; muted: boolean; volume: number; title: string; syncToClock?: boolean }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
@@ -94,6 +104,7 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
   const syncRef = useRef(syncToClock);
   const videoIdRef = useRef(videoId);
   const anchorRef = useRef({ offset, startedAt: 0 });
+  const settleRef = useRef<() => void>(() => undefined);
   const [tuning, setTuning] = useState(true);
 
   useEffect(() => {
@@ -117,14 +128,40 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     anchorRef.current.startedAt = Date.now();
     let disposed = false;
     let syncTimer: number | undefined;
+    let settleTimer: number | undefined;
     const ytWindow = window as YouTubeWindow;
     const expectedTime = () => anchorRef.current.offset + (Date.now() - anchorRef.current.startedAt) / 1000;
+    const waitUntilSynchronized = (attempt = 0) => {
+      if (disposed) return;
+      const player = playerRef.current;
+      if (!player) return;
+      const playing = player.getPlayerState() === 1;
+      const drift = Math.abs(player.getCurrentTime() - expectedTime());
+      if (playing && (!syncRef.current || drift <= 1.25)) {
+        settleTimer = window.setTimeout(() => setTuning(false), 140);
+        return;
+      }
+      if (attempt >= 60) {
+        if (playing) setTuning(false);
+        return;
+      }
+      settleTimer = window.setTimeout(() => waitUntilSynchronized(attempt + 1), 100);
+    };
+    settleRef.current = () => {
+      if (settleTimer) window.clearTimeout(settleTimer);
+      setTuning(true);
+      waitUntilSynchronized();
+    };
     const resync = (force = false) => {
       const player = playerRef.current;
       if (!player) return;
       const expected = expectedTime();
       const actual = player.getCurrentTime();
-      if (syncRef.current && (force || Math.abs(actual - expected) > 2.5)) player.seekTo(expected, true);
+      if (syncRef.current && (force || Math.abs(actual - expected) > 2.5)) {
+        setTuning(true);
+        player.seekTo(expected, true);
+        settleRef.current();
+      }
       if (player.getPlayerState() === 2) player.playVideo();
     };
 
@@ -149,10 +186,11 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
             if (mutedRef.current) target.mute(); else target.unMute();
             if (syncRef.current) target.seekTo(expectedTime(), true);
             target.playVideo();
+            settleRef.current();
             syncTimer = window.setInterval(() => resync(), 5000);
           },
           onStateChange: ({ data }) => {
-            if (data === 1) setTuning(false);
+            if (data === 1) settleRef.current();
             if (data === 2) window.setTimeout(() => resync(true), 120);
           },
         },
@@ -180,6 +218,7 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     return () => {
       disposed = true;
       if (syncTimer) window.clearInterval(syncTimer);
+      if (settleTimer) window.clearTimeout(settleTimer);
       window.removeEventListener("focus", restoreOnFocus);
       document.removeEventListener("visibilitychange", restoreOnFocus);
       readyRef.current = false;
@@ -198,34 +237,52 @@ function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, vol
     player.setVolume(volumeRef.current);
     if (mutedRef.current) player.mute(); else player.unMute();
     player.playVideo();
+    settleRef.current();
     // The offset is captured when the signal changes. Clock ticks must not retune it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId, sourceKey, videoId]);
 
   return <div className="youtube-shell" role="group" aria-label={title}>
     <div className="youtube-signal" ref={mountRef} />
-    <div className={tuning ? "tuning-card visible" : "tuning-card"}><span>SINTONIZANDO</span><strong>#{channelId.toUpperCase()}</strong></div>
+    <TuningCover visible={tuning} channelId={channelId} />
   </div>;
 }
 
-function LinearUploadedPlayer({ mediaUrl, sourceKey, offset, muted, volume, title }: { mediaUrl: string; sourceKey: string; offset: number; muted: boolean; volume: number; title: string }) {
+function LinearUploadedPlayer({ mediaUrl, channelId, sourceKey, offset, muted, volume, title }: { mediaUrl: string; channelId: string; sourceKey: string; offset: number; muted: boolean; volume: number; title: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const anchorRef = useRef({ offset, startedAt: 0 });
+  const [tuning, setTuning] = useState(true);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+    setTuning(true);
     anchorRef.current = { offset, startedAt: Date.now() };
+    const revealIfSynchronized = () => {
+      const expected = anchorRef.current.offset + (Date.now() - anchorRef.current.startedAt) / 1000;
+      if (!video.paused && Math.abs(video.currentTime - expected) <= 1.25) setTuning(false);
+    };
     const sync = () => {
       const expected = anchorRef.current.offset + (Date.now() - anchorRef.current.startedAt) / 1000;
-      if (Math.abs(video.currentTime - expected) > 2) video.currentTime = expected;
+      if (Math.abs(video.currentTime - expected) > 2) {
+        setTuning(true);
+        video.currentTime = expected;
+      }
       if (video.paused) video.play().catch(() => undefined);
+      revealIfSynchronized();
     };
+    video.addEventListener("playing", revealIfSynchronized);
+    video.addEventListener("seeked", revealIfSynchronized);
     video.currentTime = offset;
     video.play().catch(() => undefined);
     const timer = window.setInterval(sync, 5000);
     window.addEventListener("focus", sync);
-    return () => { window.clearInterval(timer); window.removeEventListener("focus", sync); };
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", sync);
+      video.removeEventListener("playing", revealIfSynchronized);
+      video.removeEventListener("seeked", revealIfSynchronized);
+    };
   }, [mediaUrl, offset, sourceKey]);
 
   useEffect(() => {
@@ -234,7 +291,7 @@ function LinearUploadedPlayer({ mediaUrl, sourceKey, offset, muted, volume, titl
     videoRef.current.muted = muted;
   }, [muted, volume]);
 
-  return <div className="youtube-shell" role="group" aria-label={title}><video ref={videoRef} className="uploaded-signal" src={mediaUrl} muted={muted} playsInline preload="auto" /></div>;
+  return <div className="youtube-shell" role="group" aria-label={title}><video ref={videoRef} className="uploaded-signal" src={mediaUrl} muted={muted} playsInline preload="auto" /><TuningCover visible={tuning} channelId={channelId} /></div>;
 }
 
 export default function Home() {
@@ -244,6 +301,7 @@ export default function Home() {
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);
   const [cinema, setCinema] = useState(false);
+  const [enabledChannelIds, setEnabledChannelIds] = useState<string[]>(["tv", "byrequest"]);
   const [requestUrl, setRequestUrl] = useState("");
   const [requestStatus, setRequestStatus] = useState<{ kind: "idle" | "loading" | "success" | "error"; message: string }>({ kind: "idle", message: "" });
   const [remote, setRemote] = useState<{ signal: RemoteSignal; schedule: RemoteScheduleItem[] }>({ signal: { mode: "automation" }, schedule: [] });
@@ -253,12 +311,27 @@ export default function Home() {
     const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, []);
-  const channel = channels.find((item) => item.id === channelId) ?? channels[0];
+  useEffect(() => {
+    let active = true;
+    const updateChannels = async () => {
+      try {
+        const response = await fetch("/api/channels", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json() as { channels?: string[] };
+        if (active && Array.isArray(data.channels) && data.channels.length) setEnabledChannelIds(data.channels);
+      } catch {}
+    };
+    updateChannels();
+    const timer = window.setInterval(updateChannels, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+  const visibleChannels = useMemo(() => channels.filter((item) => enabledChannelIds.includes(item.id)), [enabledChannelIds]);
+  const channel = visibleChannels.find((item) => item.id === channelId) ?? visibleChannels[0] ?? channels[0];
   useEffect(() => {
     let active = true;
     const updateSignal = async () => {
       try {
-        const response = await fetch(`/api/signal?channel=${channelId}`, { cache: "no-store" });
+        const response = await fetch(`/api/signal?channel=${channel.id}`, { cache: "no-store" });
         if (!response.ok) return;
         const data = await response.json();
         if (active) setRemote(data);
@@ -267,10 +340,10 @@ export default function Home() {
     updateSignal();
     const timer = window.setInterval(updateSignal, 3000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [channelId]);
+  }, [channel.id]);
   const schedule = useMemo(() => getSchedule(channel, now), [channel, now]);
   const remoteStartedAt = remote.signal.startedAt ? Date.parse(remote.signal.startedAt) : now;
-  const hasRemoteSignal = remote.signal.channelId === channelId && Boolean(remote.signal.youtubeId || remote.signal.mediaUrl);
+  const hasRemoteSignal = remote.signal.channelId === channel.id && Boolean(remote.signal.youtubeId || remote.signal.mediaUrl);
   const remoteOffset = remote.signal.mode === "live" ? 0 : Math.max(0, Math.floor((now - remoteStartedAt) / 1000));
   const current = hasRemoteSignal ? { id: remote.signal.youtubeId || `upload-${remote.signal.mediaItemId}`, title: remote.signal.title || "Señal especial", artist: remote.signal.subtitle || (remote.signal.mode === "live" ? "EN VIVO" : "HASHTAG TV"), duration: remote.signal.duration ?? (remote.signal.endsAt ? Math.max(1, Math.floor((Date.parse(remote.signal.endsAt) - remoteStartedAt) / 1000)) : 86400), year: remote.signal.mode === "live" ? "EN VIVO" : remote.signal.segmentType === "ident" ? "ID DE CANAL" : remote.signal.segmentType === "commercial" ? "COMERCIAL" : "HASHTAG TV" } : schedule.current;
   const currentOffset = hasRemoteSignal ? remoteOffset : schedule.offset;
@@ -318,7 +391,7 @@ export default function Home() {
       <section className="broadcast" id="top">
         <div className="channel-rail" aria-label="Canales">
           <p>Canales</p>
-          {channels.map((item, index) => <button className={item.id === channelId ? "channel active" : "channel"} key={item.id} onClick={() => tune(item.id)} aria-pressed={item.id === channelId}>
+          {visibleChannels.map((item, index) => <button className={item.id === channel.id ? "channel active" : "channel"} key={item.id} onClick={() => tune(item.id)} aria-pressed={item.id === channel.id}>
             <span>0{index + 1}</span><b>{item.label}</b><small>{item.description}</small>
           </button>)}
         </div>
@@ -335,7 +408,7 @@ export default function Home() {
             </div>
           </div>
           <div className="screen-frame"><div className="screen">
-            {onAir ? hasRemoteSignal && remote.signal.sourceType === "upload" && remote.signal.mediaUrl ? <LinearUploadedPlayer mediaUrl={remote.signal.mediaUrl} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} /> : <LinearYouTubePlayer videoId={current.id} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} syncToClock={remote.signal.mode !== "live"} /> :
+            {onAir ? hasRemoteSignal && remote.signal.sourceType === "upload" && remote.signal.mediaUrl ? <LinearUploadedPlayer mediaUrl={remote.signal.mediaUrl} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} /> : <LinearYouTubePlayer videoId={current.id} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} syncToClock={remote.signal.mode !== "live"} /> :
               <button className="tune-in" onClick={() => setOnAir(true)}><span className="test-pattern" aria-hidden="true" /><strong>ENCENDER {channel.label}</strong><small>Entrarás a la transmisión que ya está al aire</small></button>}
             <div className="channel-bug">{channel.label}</div>
           </div></div>
@@ -343,7 +416,7 @@ export default function Home() {
             <div className="now-playing"><span>{remote.signal.mode === "live" ? "EN VIVO" : "AHORA EN"} {channel.label}</span><h1>{current.title}</h1><p>{current.artist} · {current.year}</p></div>
           </div>
           <div className={remote.signal.mode === "live" ? "progress live-progress" : "progress"} aria-label={`Avance de ${current.title}`}><span style={{ width: `${currentProgress}%` }} /></div>
-          {channelId === "byrequest" && <section className="request-panel" aria-labelledby="request-title">
+          {channel.id === "byrequest" && <section className="request-panel" aria-labelledby="request-title">
             <div className="request-copy"><span>VIDEO A LA CARTA</span><h2 id="request-title">Tú pide. #BYREQUEST lo pone.</h2><p>Pega un enlace de YouTube. Cada pedido entra al final de la fila y se reproduce por orden de llegada.</p></div>
             <form onSubmit={submitRequest}>
               <label htmlFor="request-url">Enlace de YouTube</label>
