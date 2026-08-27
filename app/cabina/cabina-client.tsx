@@ -31,6 +31,7 @@ const channelList = [
   { id: "pop", label: "#POP", color: "#ff5bac" },
   { id: "perreo", label: "#PERREO", color: "#00e0a4" },
   { id: "kpop", label: "#KPOP", color: "#a985ff" },
+  { id: "byrequest", label: "#BYREQUEST", color: "#53d8ff" },
 ];
 
 const typeLabel = { music: "Videoclip", ident: "ID de canal", commercial: "Comercial", program: "Programa" };
