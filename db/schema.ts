@@ -40,6 +40,7 @@ export const playoutQueueItems = sqliteTable("playout_queue_items", {
 
 export const channelSettings = sqliteTable("channel_settings", {
   channelId: text("channel_id").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   shuffleEnabled: integer("shuffle_enabled", { mode: "boolean" }).notNull().default(true),
   commercialsEnabled: integer("commercials_enabled", { mode: "boolean" }).notNull().default(false),
   commercialIntervalMinutes: integer("commercial_interval_minutes").notNull().default(30),
