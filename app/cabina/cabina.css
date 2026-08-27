@@ -13,12 +13,13 @@
 .operator b { font-size: 11px; }
 .control-header .inline-flex { border-color: #3a3a40; border-radius: 0; background: transparent; color: white; font-size: 10px; }
 .header-actions { display: flex; gap: 7px; }
-.channel-bank { display: grid; grid-template-columns: repeat(5, 1fr); padding: 0 3vw; border-bottom: 1px solid #303036; background: #111114; }
+.channel-bank { display: grid; grid-template-columns: repeat(6, 1fr); padding: 0 3vw; border-bottom: 1px solid #303036; background: #111114; }
 .channel-bank button { position: relative; padding: 18px 18px 16px; border: 0; border-right: 1px solid #303036; background: transparent; color: #77777f; text-align: left; cursor: pointer; }
 .channel-bank button:first-child { border-left: 1px solid #303036; }
 .channel-bank button span { display: block; font-size: clamp(19px, 2vw, 28px); font-weight: 900; letter-spacing: -.07em; }
 .channel-bank button small { font-size: 7px; letter-spacing: .15em; }
 .channel-bank button.active { color: var(--control-signal); background: #18181c; }
+.channel-bank button.is-offline:not(.active) { opacity: .52; }
 .channel-bank button.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 4px; background: var(--control-signal); }
 .master-grid { display: grid; grid-template-columns: minmax(330px, 34vw) 1fr; min-height: 690px; }
 .signal-monitor { padding: 28px 2.5vw; border-right: 1px solid #303036; background: #0d0d10; }
@@ -71,7 +72,7 @@
 .queue-item small, .queue-item time { color: #77777f; font-size: 9px; }
 .queue-item button { color: #888890; }
 .row-actions { flex-direction: row !important; align-items: center; }
-.automation-settings { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 18px 0 30px; }
+.automation-settings { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0 30px; }
 .automation-settings > label { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 16px; border: 1px solid #34343a; background: #18181c; cursor: pointer; }
 .automation-settings > label > span { display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; font-size: 11px; font-weight: 800; }
 .automation-settings svg { width: 16px; color: var(--control-signal); }
@@ -171,7 +172,7 @@
   .control-header .inline-flex { width: 42px; overflow: hidden; padding: 0 12px; }
   .header-actions { justify-self: end; }
   .control-brand div { font-size: 12px; }
-  .channel-bank { overflow-x: auto; grid-template-columns: repeat(5, minmax(100px, 1fr)); padding: 0; }
+  .channel-bank { overflow-x: auto; grid-template-columns: repeat(6, minmax(100px, 1fr)); padding: 0; }
   .master-grid { display: block; }
   .signal-monitor, .control-panels { padding: 22px 4vw; }
   .control-tabs { overflow-x: auto; }
