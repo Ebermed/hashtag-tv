@@ -331,20 +331,36 @@ function IdentOverlay({ mediaUrl, channelId, sourceKey, offset, muted, volume, t
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+    let disposed = false;
+    let positioned = false;
     setFailed(false);
-    const start = () => {
-      if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = offset % video.duration;
-      video.play().catch(() => undefined);
+
+    const resume = () => {
+      if (disposed || !video.paused) return;
+      void video.play().catch(() => undefined);
     };
-    video.addEventListener("loadedmetadata", start);
-    video.addEventListener("canplay", start);
-    video.addEventListener("error", () => setFailed(true), { once: true });
-    if (video.readyState >= 1) start();
+    const positionOnce = () => {
+      if (disposed || positioned || !Number.isFinite(video.duration) || video.duration <= 0) return;
+      positioned = true;
+      const target = ((offset % video.duration) + video.duration) % video.duration;
+      if (Math.abs(video.currentTime - target) > 0.05) video.currentTime = target;
+      resume();
+    };
+    const onError = () => setFailed(true);
+
+    video.addEventListener("loadedmetadata", positionOnce);
+    video.addEventListener("canplay", resume);
+    video.addEventListener("error", onError);
+    if (video.readyState >= 1) positionOnce();
     return () => {
-      video.removeEventListener("loadedmetadata", start);
-      video.removeEventListener("canplay", start);
+      disposed = true;
+      video.pause();
+      video.removeEventListener("loadedmetadata", positionOnce);
+      video.removeEventListener("canplay", resume);
+      video.removeEventListener("error", onError);
     };
-    // The ID loops for its scheduled continuity window without restarting on clock ticks.
+    // Position the ID once. Seeking again from canplay creates a seek/canplay
+    // feedback loop that repeats the first audio frame indefinitely.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaUrl, sourceKey]);
 
