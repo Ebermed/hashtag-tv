@@ -75,3 +75,7 @@ npm.cmd run deploy:cloudflare
 ```
 
 Los secretos permanecen guardados en Cloudflare.
+
+## Estado
+
+Conexión automática verificada y primer build solicitado el 27 de agosto de 2026.
