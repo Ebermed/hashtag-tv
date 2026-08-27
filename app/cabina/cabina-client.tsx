@@ -163,34 +163,109 @@ function detectFileDuration(file: File) {
   });
 }
 
-function sendVideoUpload(form: FormData, onProgress: (value: number) => void) {
-  return new Promise<{ status: number; data: { error?: string } }>((resolve, reject) => {
+type UploadMetadata = {
+  type: MediaType;
+  title: string;
+  subtitle: string;
+  duration: number;
+  channelId: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+};
+
+type UploadSession = { key: string; uploadId: string; partSize: number };
+type UploadedPart = { partNumber: number; etag: string };
+
+class UploadRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+function readableUploadError(rawResponse: string, status: number) {
+  try {
+    const data = JSON.parse(rawResponse) as { error?: string };
+    if (data.error) return data.error;
+  } catch {
+    // Cloudflare can return an HTML error page before the request reaches the app.
+  }
+  const readableResponse = rawResponse
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return readableResponse.slice(0, 240) || `Cloudflare rechazó la subida (código ${status}).`;
+}
+
+async function readUploadResponse<T>(response: Response) {
+  const rawResponse = await response.text();
+  if (!response.ok) throw new UploadRequestError(readableUploadError(rawResponse, response.status), response.status);
+  try { return JSON.parse(rawResponse) as T; }
+  catch { throw new Error("El servidor no confirmó la subida del video."); }
+}
+
+function sendUploadPart(url: string, chunk: Blob, completedBytes: number, totalBytes: number, onProgress: (value: number) => void) {
+  return new Promise<UploadedPart>((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("POST", "/api/control/upload");
+    request.open("PUT", url);
     request.responseType = "text";
     request.timeout = 5 * 60 * 1000;
+    request.setRequestHeader("Content-Type", "application/octet-stream");
     request.upload.onprogress = (event) => {
-      if (event.lengthComputable) onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      if (event.lengthComputable) onProgress(Math.min(98, Math.round(((completedBytes + event.loaded) / totalBytes) * 98)));
     };
     request.onload = () => {
       const rawResponse = request.responseText || String(request.response || "");
-      let data: { error?: string } = {};
-      try { data = JSON.parse(rawResponse) as { error?: string }; }
-      catch {
-        const readableResponse = rawResponse
-          .replace(/<style[\s\S]*?<\/style>/gi, " ")
-          .replace(/<script[\s\S]*?<\/script>/gi, " ")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-        if (request.status >= 400) data.error = readableResponse.slice(0, 240) || `Cloudflare rechazó la subida (código ${request.status}).`;
+      if (request.status < 200 || request.status >= 300) {
+        reject(new UploadRequestError(readableUploadError(rawResponse, request.status), request.status));
+        return;
       }
-      resolve({ status: request.status, data });
+      try { resolve(JSON.parse(rawResponse) as UploadedPart); }
+      catch { reject(new Error("El servidor no confirmó un fragmento del video.")); }
     };
     request.onerror = () => reject(new Error("Se perdió la conexión mientras se subía el video."));
     request.ontimeout = () => reject(new Error("La subida tardó demasiado. Revisa tu conexión e inténtalo de nuevo."));
-    request.send(form);
+    request.send(chunk);
   });
+}
+
+async function uploadVideoFile(file: File, metadata: UploadMetadata, onProgress: (value: number) => void) {
+  let session: UploadSession | null = null;
+  try {
+    const createResponse = await fetch("/api/control/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", metadata }),
+    });
+    session = await readUploadResponse<UploadSession>(createResponse);
+    const parts: UploadedPart[] = [];
+
+    for (let offset = 0, partNumber = 1; offset < file.size; offset += session.partSize, partNumber += 1) {
+      const chunk = file.slice(offset, Math.min(file.size, offset + session.partSize));
+      const query = new URLSearchParams({ key: session.key, uploadId: session.uploadId, partNumber: String(partNumber) });
+      const part = await sendUploadPart(`/api/control/upload?${query}`, chunk, offset, file.size, onProgress);
+      parts.push(part);
+    }
+
+    onProgress(99);
+    const completeResponse = await fetch("/api/control/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "complete", ...session, metadata, parts }),
+    });
+    const result = await readUploadResponse<{ item: MediaItem }>(completeResponse);
+    onProgress(100);
+    return result;
+  } catch (error) {
+    if (session) {
+      const query = new URLSearchParams({ key: session.key, uploadId: session.uploadId });
+      try { await fetch(`/api/control/upload?${query}`, { method: "DELETE" }); }
+      catch { /* R2 removes abandoned multipart uploads automatically. */ }
+    }
+    throw error;
+  }
 }
 
 export function CabinaClient({ operatorName }: { operatorName: string }) {
@@ -322,19 +397,19 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
     setBusy(true); setError(""); setNotice(""); setUploadProgress(0);
     setUploadFeedback({ kind: "uploading", message: "Preparando el video…" });
     try {
-      const form = new FormData();
-      form.set("file", uploadFile);
-      form.set("type", asset.type);
-      form.set("title", asset.title);
-      form.set("subtitle", asset.subtitle);
-      form.set("duration", String(duration));
-      form.set("channelId", channelId);
-      const response = await sendVideoUpload(form, (progress) => {
+      await uploadVideoFile(uploadFile, {
+        type: asset.type,
+        title: asset.title,
+        subtitle: asset.subtitle,
+        duration,
+        channelId,
+        fileName: uploadFile.name,
+        fileSize: uploadFile.size,
+        mimeType: uploadFile.type || "video/mp4",
+      }, (progress) => {
         setUploadProgress(progress);
         setUploadFeedback({ kind: "uploading", message: `Subiendo video · ${progress}%` });
       });
-      if (response.status === 401) { window.location.replace("/cabina/login"); return; }
-      if (response.status < 200 || response.status >= 300) throw new Error(response.data.error ?? "No fue posible subir el video.");
       setUploadProgress(100);
       const success = `${asset.title || "La pieza"} fue cargada y añadida a la rotación.`;
       setNotice(success);
@@ -342,6 +417,7 @@ export function CabinaClient({ operatorName }: { operatorName: string }) {
       await load();
       setUploadFeedback({ kind: "success", message: success });
     } catch (reason) {
+      if (reason instanceof UploadRequestError && reason.status === 401) { window.location.replace("/cabina/login"); return; }
       const message = reason instanceof Error ? reason.message : "Error inesperado";
       setError(message);
       setUploadFeedback({ kind: "error", message });
