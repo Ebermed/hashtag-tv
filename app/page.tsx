@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 
 type Video = { id: string; title: string; artist: string; duration: number; year: string };
@@ -65,6 +66,12 @@ const channels: Channel[] = [
     { id: "gdZLi9oWNZg", title: "Dynamite", artist: "BTS", duration: 224, year: "2020" },
     { id: "kOHB85vDuow", title: "FANCY", artist: "TWICE", duration: 214, year: "2019" },
   ]},
+  { id: "byrequest", label: "#BYREQUEST", description: "Tú eliges qué sigue", accent: "#53d8ff", videos: [
+    { id: "IHNzOHi8sJs", title: "DDU-DU DDU-DU", artist: "BLACKPINK", duration: 216, year: "2018" },
+    { id: "fJ9rUzIMcZQ", title: "Bohemian Rhapsody", artist: "Queen", duration: 359, year: "1975" },
+    { id: "4NRXx6U8ABQ", title: "Blinding Lights", artist: "The Weeknd", duration: 260, year: "2020" },
+    { id: "kXYiU_JCYtU", title: "Numb", artist: "Linkin Park", duration: 187, year: "2003" },
+  ]},
 ];
 
 function getSchedule(channel: Channel, now: number) {
@@ -77,8 +84,6 @@ function getSchedule(channel: Channel, now: number) {
   }
   return { current: channel.videos[0], next: channel.videos[1], after: channel.videos[2], offset: 0, progress: 0 };
 }
-
-const formatTime = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
 function LinearYouTubePlayer({ videoId, channelId, sourceKey, offset, muted, volume, title, syncToClock = true }: { videoId: string; channelId: string; sourceKey: string; offset: number; muted: boolean; volume: number; title: string; syncToClock?: boolean }) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -239,6 +244,8 @@ export default function Home() {
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);
   const [cinema, setCinema] = useState(false);
+  const [requestUrl, setRequestUrl] = useState("");
+  const [requestStatus, setRequestStatus] = useState<{ kind: "idle" | "loading" | "success" | "error"; message: string }>({ kind: "idle", message: "" });
   const [remote, setRemote] = useState<{ signal: RemoteSignal; schedule: RemoteScheduleItem[] }>({ signal: { mode: "automation" }, schedule: [] });
   useEffect(() => {
     const tick = () => setNow(Date.now());
@@ -269,8 +276,6 @@ export default function Home() {
   const currentOffset = hasRemoteSignal ? remoteOffset : schedule.offset;
   const currentProgress = hasRemoteSignal ? (remote.signal.mode === "live" ? 100 : Math.min(100, (currentOffset / current.duration) * 100)) : schedule.progress;
   const sourceKey = hasRemoteSignal ? `${remote.signal.mode}:${remote.signal.startedAt}:${current.id}` : `fallback:${current.id}`;
-  const nextGuide = remote.schedule[0] ? { title: remote.schedule[0].title, artist: remote.schedule[0].subtitle, duration: remote.schedule[0].duration } : schedule.next;
-  const afterGuide = remote.schedule[1] ? { title: remote.schedule[1].title, artist: remote.schedule[1].subtitle, duration: remote.schedule[1].duration } : schedule.after;
   const tune = (nextId: string) => { setChannelId(nextId); setOnAir(true); };
   const toggleMute = () => {
     if (muted && volume === 0) setVolume(80);
@@ -280,6 +285,27 @@ export default function Home() {
     setVolume(nextVolume);
     setMuted(nextVolume === 0);
   };
+  const submitRequest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!requestUrl.trim() || requestStatus.kind === "loading") return;
+    setRequestStatus({ kind: "loading", message: "Revisando tu videoclip..." });
+    try {
+      const response = await fetch("/api/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ youtube: requestUrl }),
+      });
+      const data = await response.json() as { error?: string; title?: string; position?: number };
+      if (!response.ok) throw new Error(data.error || "No pudimos agregar ese video.");
+      setRequestUrl("");
+      setRequestStatus({
+        kind: "success",
+        message: `${data.title || "Tu videoclip"} quedó en la fila${data.position ? `, lugar ${data.position}` : ""}.`,
+      });
+    } catch (error) {
+      setRequestStatus({ kind: "error", message: error instanceof Error ? error.message : "No pudimos agregar ese video." });
+    }
+  };
 
   return (
     <main className={cinema ? "site cinema" : "site"} style={{ "--signal": channel.accent } as React.CSSProperties}>
@@ -287,7 +313,6 @@ export default function Home() {
         <a className="brand" href="#top" aria-label="Hashtag TV, inicio"><span className="brand-mark">#</span><span>HASHTAG<br /><b>TV</b></span></a>
         <div className="on-air"><i /> SEÑAL 24/7</div>
         <p className="tagline">DE TODA, A TODAS HORAS</p>
-        <Button className="guide-button" variant="outline" onClick={() => document.getElementById("guia")?.scrollIntoView({ behavior: "smooth" })}>Ver guía</Button>
       </header>
 
       <section className="broadcast" id="top">
@@ -311,27 +336,27 @@ export default function Home() {
           </div>
           <div className="screen-frame"><div className="screen">
             {onAir ? hasRemoteSignal && remote.signal.sourceType === "upload" && remote.signal.mediaUrl ? <LinearUploadedPlayer mediaUrl={remote.signal.mediaUrl} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} /> : <LinearYouTubePlayer videoId={current.id} channelId={channel.id} sourceKey={sourceKey} offset={currentOffset} muted={muted} volume={volume} title={`${current.title} en Hashtag TV`} syncToClock={remote.signal.mode !== "live"} /> :
-              <button className="tune-in" onClick={() => setOnAir(true)}><span className="test-pattern" aria-hidden="true" /><strong>ENCENDER #TV</strong><small>Entrarás a la transmisión que ya está al aire</small></button>}
+              <button className="tune-in" onClick={() => setOnAir(true)}><span className="test-pattern" aria-hidden="true" /><strong>ENCENDER {channel.label}</strong><small>Entrarás a la transmisión que ya está al aire</small></button>}
             <div className="channel-bug">{channel.label}</div>
           </div></div>
           <div className="transport">
             <div className="now-playing"><span>{remote.signal.mode === "live" ? "EN VIVO" : "AHORA EN"} {channel.label}</span><h1>{current.title}</h1><p>{current.artist} · {current.year}</p></div>
           </div>
           <div className={remote.signal.mode === "live" ? "progress live-progress" : "progress"} aria-label={`Avance de ${current.title}`}><span style={{ width: `${currentProgress}%` }} /></div>
+          {channelId === "byrequest" && <section className="request-panel" aria-labelledby="request-title">
+            <div className="request-copy"><span>VIDEO A LA CARTA</span><h2 id="request-title">Tú pide. #BYREQUEST lo pone.</h2><p>Pega un enlace de YouTube. Cada pedido entra al final de la fila y se reproduce por orden de llegada.</p></div>
+            <form onSubmit={submitRequest}>
+              <label htmlFor="request-url">Enlace de YouTube</label>
+              <div className="request-fields">
+                <Input id="request-url" type="url" inputMode="url" placeholder="https://youtube.com/watch?v=..." value={requestUrl} onChange={(event) => setRequestUrl(event.target.value)} required />
+                <Button type="submit" disabled={requestStatus.kind === "loading"}>{requestStatus.kind === "loading" ? "AGREGANDO..." : "PEDIR VIDEOCLIP"}</Button>
+              </div>
+              <output className={`request-message ${requestStatus.kind}`} aria-live="polite">{requestStatus.message}</output>
+            </form>
+          </section>}
         </div>
       </section>
-
-      <section className="guide" id="guia">
-        <div className="section-title"><p>PROGRAMACIÓN</p><h2>Lo que está pasando</h2><span>{new Date(now).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })} · HORA DEL ESPECTADOR</span></div>
-        <div className="guide-grid">
-          <article className="guide-card current-card"><span>{remote.signal.mode === "live" ? "SEÑAL EN VIVO" : "EN PANTALLA"}</span><div className="guide-number">01</div><h3>{current.title}</h3><p>{current.artist}</p><small>{remote.signal.mode === "live" ? "Transmitiendo ahora" : `Quedan aprox. ${formatTime(Math.max(current.duration - currentOffset, 0))}`}</small></article>
-          <article className="guide-card"><span>A CONTINUACIÓN</span><div className="guide-number">02</div><h3>{nextGuide.title}</h3><p>{nextGuide.artist}</p><small>{formatTime(nextGuide.duration)}</small></article>
-          <article className="guide-card"><span>DESPUÉS</span><div className="guide-number">03</div><h3>{afterGuide.title}</h3><p>{afterGuide.artist}</p><small>{formatTime(afterGuide.duration)}</small></article>
-        </div>
-      </section>
-
-      <section className="live-strip"><div><span>CONTROL MAESTRO</span><h2>La cabina ya puede tomar la señal.</h2></div><p>Estudio, entrevistas, especiales, comerciales y videoclips pueden entrar al aire. Cuando termina una intervención, la programación automática continúa.</p></section>
-      <footer><div className="brand footer-brand"><span className="brand-mark">#</span><span>HASHTAG<br /><b>TV</b></span></div><p>Una evolución de Hashtag Radio.</p><span>PROTOTIPO · 2026</span></footer>
+      <footer><div className="brand footer-brand"><span className="brand-mark">#</span><span>HASHTAG<br /><b>TV</b></span></div><p>Una página de Ebermedia Entertainment.</p><span>PROTOTIPO · 2026</span></footer>
     </main>
   );
 }
