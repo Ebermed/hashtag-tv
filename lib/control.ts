@@ -3,7 +3,7 @@ import { getCabinaSession } from "@/lib/cabina-auth";
 import { getDb } from "@/db";
 import { channelSettings, controlLog, liveSessions, mediaItems, playlistItems, playoutQueueItems, signalOverrides } from "@/db/schema";
 
-export const CHANNEL_IDS = ["tv", "rock", "pop", "perreo", "kpop"] as const;
+export const CHANNEL_IDS = ["tv", "rock", "pop", "perreo", "kpop", "byrequest"] as const;
 export type ChannelId = (typeof CHANNEL_IDS)[number];
 
 export function isChannelId(value: unknown): value is ChannelId {
@@ -35,7 +35,7 @@ export async function getControlState() {
   const [media, rotation, queue, settings, sessions, overrides, logs] = await Promise.all([
     db.select().from(mediaItems).orderBy(desc(mediaItems.id)),
     db.select({ id: playlistItems.id, channelId: playlistItems.channelId, position: playlistItems.position, mediaItemId: mediaItems.id, title: mediaItems.title, subtitle: mediaItems.subtitle, type: mediaItems.type, youtubeId: mediaItems.youtubeId, duration: mediaItems.duration }).from(playlistItems).innerJoin(mediaItems, eq(playlistItems.mediaItemId, mediaItems.id)).orderBy(asc(playlistItems.channelId), asc(playlistItems.position)),
-    db.select({ id: playoutQueueItems.id, channelId: playoutQueueItems.channelId, position: playoutQueueItems.position, mediaItemId: mediaItems.id, title: mediaItems.title, subtitle: mediaItems.subtitle, type: mediaItems.type, youtubeId: mediaItems.youtubeId, duration: mediaItems.duration }).from(playoutQueueItems).innerJoin(mediaItems, eq(playoutQueueItems.mediaItemId, mediaItems.id)).orderBy(asc(playoutQueueItems.channelId), asc(playoutQueueItems.position)),
+    db.select({ id: playoutQueueItems.id, channelId: playoutQueueItems.channelId, position: playoutQueueItems.position, mediaItemId: mediaItems.id, title: mediaItems.title, subtitle: mediaItems.subtitle, type: mediaItems.type, youtubeId: mediaItems.youtubeId, duration: mediaItems.duration }).from(playoutQueueItems).innerJoin(mediaItems, eq(playoutQueueItems.mediaItemId, mediaItems.id)).orderBy(asc(playoutQueueItems.channelId), asc(playoutQueueItems.position), asc(playoutQueueItems.id)),
     db.select().from(channelSettings),
     db.select().from(liveSessions),
     db.select().from(signalOverrides),
