@@ -4,9 +4,17 @@ import { getMediaBucket } from "@/lib/media-storage";
 import { importYouTubePlaylist, YouTubeImportError } from "@/lib/youtube-playlist";
 
 function errorResponse(error: unknown) {
-  const status = error instanceof ControlError ? error.status : 500;
-  const message = error instanceof Error ? error.message : "Error inesperado";
-  return Response.json({ error: message }, { status });
+  if (error instanceof ControlError) {
+    return Response.json({ error: error.message }, { status: error.status });
+  }
+  console.error(JSON.stringify({
+    event: "control_request_failed",
+    errorType: error instanceof Error ? error.name : typeof error,
+  }));
+  return Response.json(
+    { error: "No fue posible completar la operación. Intenta de nuevo." },
+    { status: 500 },
+  );
 }
 
 export async function GET() {
