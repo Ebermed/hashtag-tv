@@ -167,16 +167,23 @@ function sendVideoUpload(form: FormData, onProgress: (value: number) => void) {
   return new Promise<{ status: number; data: { error?: string } }>((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open("POST", "/api/control/upload");
-    request.responseType = "json";
+    request.responseType = "text";
     request.timeout = 5 * 60 * 1000;
     request.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
     };
     request.onload = () => {
-      let data = request.response as { error?: string } | null;
-      if (!data) {
-        try { data = JSON.parse(request.responseText) as { error?: string }; }
-        catch { data = {}; }
+      const rawResponse = request.responseText || String(request.response || "");
+      let data: { error?: string } = {};
+      try { data = JSON.parse(rawResponse) as { error?: string }; }
+      catch {
+        const readableResponse = rawResponse
+          .replace(/<style[\s\S]*?<\/style>/gi, " ")
+          .replace(/<script[\s\S]*?<\/script>/gi, " ")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (request.status >= 400) data.error = readableResponse.slice(0, 240) || `Cloudflare rechazó la subida (código ${request.status}).`;
       }
       resolve({ status: request.status, data });
     };

@@ -28,7 +28,8 @@ export async function POST(request: Request) {
 
     uploadedKey = `media/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]+/g, "-") || "video"}`;
     bucket = getMediaBucket();
-    await bucket.put(uploadedKey, file.stream(), { httpMetadata: { contentType: file.type || "video/mp4" }, customMetadata: { title, channelId } });
+    const storedObject = await bucket.put(uploadedKey, file, { httpMetadata: { contentType: file.type || "video/mp4" }, customMetadata: { title, channelId } });
+    if (!storedObject) throw new Error("El almacenamiento no confirmó la subida del video.");
     const db = getDb();
     const [item] = await db.insert(mediaItems).values({ type: type as "music" | "ident" | "commercial" | "program", title, subtitle, youtubeId: "", sourceType: "upload", storageKey: uploadedKey, mimeType: file.type || "video/mp4", fileSize: file.size, duration }).returning();
     if (!item) throw new Error("El video se subió, pero no fue posible guardarlo en la biblioteca.");

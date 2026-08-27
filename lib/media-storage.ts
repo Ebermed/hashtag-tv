@@ -17,7 +17,7 @@ type MediaBucket = {
   delete: (key: string) => Promise<void>;
   get: (key: string, options?: { range?: { offset: number; length: number } }) => Promise<StoredObject | null>;
   head: (key: string) => Promise<StoredObjectHead | null>;
-  put: (key: string, value: ReadableStream<Uint8Array>, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }) => Promise<unknown>;
+  put: (key: string, value: ReadableStream<Uint8Array> | ArrayBuffer | Blob, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }) => Promise<StoredObjectHead | null>;
 };
 
 export function getMediaBucket() {
