@@ -62,8 +62,12 @@ function trackMetadata(rawTitle: string, channelTitle: string) {
 async function youtubeRequest<T>(path: string, parameters: Record<string, string>, apiKey: string) {
   const url = new URL(`https://www.googleapis.com/youtube/v3/${path}`);
   for (const [key, value] of Object.entries(parameters)) if (value) url.searchParams.set(key, value);
-  url.searchParams.set("key", apiKey);
-  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "x-goog-api-key": apiKey,
+    },
+  });
   const data = await response.json() as T & { error?: { message?: string; errors?: Array<{ reason?: string }> } };
   if (!response.ok) {
     const reason = data.error?.errors?.[0]?.reason;
@@ -73,6 +77,14 @@ async function youtubeRequest<T>(path: string, parameters: Record<string, string
     throw new YouTubeImportError(data.error?.message || "YouTube no pudo entregar la playlist.", 502);
   }
   return data;
+}
+
+function chunksOf<T>(items: T[], size = 10) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 export async function importYouTubePlaylist(value: string, channelId: string) {
@@ -136,9 +148,11 @@ export async function importYouTubePlaylist(value: string, channelId: string) {
       });
       unavailable += newIds.length - rows.length;
       if (rows.length) {
-        const inserted = await db.insert(mediaItems).values(rows).returning({ id: mediaItems.id, youtubeId: mediaItems.youtubeId });
-        for (const item of inserted) mediaIdByYouTube.set(item.youtubeId, item.id);
-        imported += inserted.length;
+        for (const rowChunk of chunksOf(rows)) {
+          const inserted = await db.insert(mediaItems).values(rowChunk).returning({ id: mediaItems.id, youtubeId: mediaItems.youtubeId });
+          for (const item of inserted) mediaIdByYouTube.set(item.youtubeId, item.id);
+          imported += inserted.length;
+        }
       }
     }
 
@@ -149,8 +163,10 @@ export async function importYouTubePlaylist(value: string, channelId: string) {
       return [{ channelId, mediaItemId, position: nextPosition++ }];
     });
     if (rotationValues.length) {
-      await db.insert(playlistItems).values(rotationValues).onConflictDoNothing();
-      rotationsAdded += rotationValues.length;
+      for (const rotationChunk of chunksOf(rotationValues)) {
+        await db.insert(playlistItems).values(rotationChunk).onConflictDoNothing();
+        rotationsAdded += rotationChunk.length;
+      }
     }
 
     nextPageToken = page.nextPageToken ?? "";
